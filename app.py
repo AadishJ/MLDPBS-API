@@ -12,7 +12,8 @@ import os
 import subprocess
 import tempfile
 import json
-from flask_cors import CORS  # Import Flask-CORS
+from flask_cors import CORS
+import gc  # Import garbage collector
 
 app = Flask(__name__)
 # Enable CORS for all routes and all origins
@@ -23,6 +24,9 @@ CORS(
     },
 )
 
+# Set up gunicorn timeout configuration
+app.config["TIMEOUT"] = 300  # 5 minutes instead of default 30 seconds
+
 
 def prepare_data(data):
     X = data["Day No."].values.reshape(-1, 1)
@@ -31,18 +35,21 @@ def prepare_data(data):
 
 
 def train_and_predict(X_train, X_test, y_train, y_test, future_days=7):
+    # Use only two models instead of four to save memory
     models = {
         "XGBoost": XGBRegressor(random_state=42),
-        "CatBoost": CatBoostRegressor(random_state=42, verbose=False),
-        "LightGBM": LGBMRegressor(
-            random_state=42, min_child_samples=1, min_data_in_bin=1
-        ),
         "GBR": GradientBoostingRegressor(random_state=42),
     }
 
     results = {}
     for name, model in models.items():
         try:
+            # Set lower complexity for models to save memory
+            if name == "XGBoost":
+                model.set_params(max_depth=3, n_estimators=50)
+            elif name == "GBR":
+                model.set_params(max_depth=3, n_estimators=50)
+
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
             mse = mean_squared_error(y_test, y_pred)
@@ -51,6 +58,10 @@ def train_and_predict(X_train, X_test, y_train, y_test, future_days=7):
                     len(X_train) + len(X_test), len(X_train) + len(X_test) + future_days
                 ).reshape(-1, 1)
             )
+
+            # Explicitly clean up memory
+            gc.collect()
+
         except Exception as e:
             print(f"Error training {name} model: {str(e)}")
             print(f"Falling back to LinearRegression for {name}")
@@ -87,9 +98,13 @@ def run_buddy_allocation(percentages):
     try:
         # Check if the executable exists
         if os.path.exists(buddy_executable):
-            # Run the executable
+            # Run the executable with a timeout to prevent hanging
             run_result = subprocess.run(
-                [buddy_executable], capture_output=True, text=True, check=True
+                [buddy_executable],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
             )
 
             # Just return the results section of the output
@@ -107,6 +122,8 @@ def run_buddy_allocation(percentages):
             return "\n".join(result_section)
         else:
             return "BuddyAllocation executable not found. It should be compiled during the build process."
+    except subprocess.TimeoutExpired:
+        return "BuddyAllocation execution timed out after 30 seconds."
     except subprocess.CalledProcessError as e:
         return f"Error running BuddyAllocation: {e.stderr}"
 
@@ -123,6 +140,15 @@ def predict():
                     {
                         "error": "Invalid data format. Expected an array of dataset objects"
                     }
+                ),
+                400,
+            )
+
+        # Limit number of datasets to prevent memory issues
+        if len(data) > 5:
+            return (
+                jsonify(
+                    {"error": "Too many datasets. Maximum 5 allowed for processing."}
                 ),
                 400,
             )
@@ -157,6 +183,10 @@ def predict():
                     400,
                 )
 
+            # Limit dataset size to prevent memory issues
+            if len(df) > 1000:
+                df = df.sample(1000)
+
             datasets.append(df)
             dataset_names.append(name)
 
@@ -166,6 +196,8 @@ def predict():
             X_train, X_test, y_train, y_test = prepare_data(data)
             results = train_and_predict(X_train, X_test, y_train, y_test)
             all_results.append(results)
+            # Force garbage collection after each dataset
+            gc.collect()
 
         # Calculate all XGBoost averages
         xgb_averages = [
@@ -197,6 +229,9 @@ def predict():
             ],
             "buddy_allocation_output": buddy_output,
         }
+
+        # Force garbage collection before returning
+        gc.collect()
 
         return jsonify(response)
 
