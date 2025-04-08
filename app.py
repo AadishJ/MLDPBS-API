@@ -66,7 +66,6 @@ def train_and_predict(X_train, X_test, y_train, y_test, future_days=7):
 def run_buddy_allocation(percentages):
     """Run the BuddyAllocation program with the given percentages."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    buddy_c_path = os.path.join(script_dir, "BuddyAllocation.c")
     buddy_executable = os.path.join(script_dir, "BuddyAllocation")
 
     # Create a predictions directory if it doesn't exist
@@ -80,15 +79,8 @@ def run_buddy_allocation(percentages):
             f.write(f"{percentage:.2f}\n")
 
     try:
-        # Compile the C file if it exists
-        if os.path.exists(buddy_c_path):
-            compile_result = subprocess.run(
-                ["gcc", buddy_c_path, "-o", buddy_executable, "-pthread"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
+        # Check if the executable exists
+        if os.path.exists(buddy_executable):
             # Run the executable
             run_result = subprocess.run(
                 [buddy_executable], capture_output=True, text=True, check=True
@@ -108,9 +100,9 @@ def run_buddy_allocation(percentages):
 
             return "\n".join(result_section)
         else:
-            return f"Error: Could not find BuddyAllocation.c in {script_dir}"
+            return "BuddyAllocation executable not found. It should be compiled during the build process."
     except subprocess.CalledProcessError as e:
-        return f"Error in process: {e.stderr}"
+        return f"Error running BuddyAllocation: {e.stderr}"
 
 
 @app.route('/predict', methods=['POST'])
