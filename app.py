@@ -12,8 +12,17 @@ import os
 import subprocess
 import tempfile
 import json
+from flask_cors import CORS  # Import Flask-CORS
 
 app = Flask(__name__)
+# Enable CORS for all routes and all origins
+CORS(
+    app,
+    resources={
+        r"/*": {"origins": "*", "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]}
+    },
+)
+
 
 def prepare_data(data):
     X = data["Day No."].values.reshape(-1, 1)
@@ -55,10 +64,7 @@ def train_and_predict(X_train, X_test, y_train, y_test, future_days=7):
                 ).reshape(-1, 1)
             )
 
-        results[name] = {
-            "mse": float(mse), 
-            "predictions": future_predictions.tolist()
-        }
+        results[name] = {"mse": float(mse), "predictions": future_predictions.tolist()}
 
     return results
 
@@ -105,32 +111,51 @@ def run_buddy_allocation(percentages):
         return f"Error running BuddyAllocation: {e.stderr}"
 
 
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
     try:
         # Get JSON data from request
         data = request.json
 
         if not data or not isinstance(data, list):
-            return jsonify({"error": "Invalid data format. Expected an array of dataset objects"}), 400
+            return (
+                jsonify(
+                    {
+                        "error": "Invalid data format. Expected an array of dataset objects"
+                    }
+                ),
+                400,
+            )
 
         datasets = []
         dataset_names = []
 
         # Process each dataset from the request
         for dataset_obj in data:
-            if 'name' not in dataset_obj or 'data' not in dataset_obj:
-                return jsonify({"error": "Each dataset must have 'name' and 'data' fields"}), 400
+            if "name" not in dataset_obj or "data" not in dataset_obj:
+                return (
+                    jsonify(
+                        {"error": "Each dataset must have 'name' and 'data' fields"}
+                    ),
+                    400,
+                )
 
-            name = dataset_obj['name']
-            dataset_data = dataset_obj['data']
+            name = dataset_obj["name"]
+            dataset_data = dataset_obj["data"]
 
             # Convert to pandas DataFrame
             df = pd.DataFrame(dataset_data)
 
             # Validate required columns
             if "Day No." not in df.columns or "Number of entries" not in df.columns:
-                return jsonify({"error": f"Dataset {name} missing required columns ('Day No.' and 'Number of entries')"}), 400
+                return (
+                    jsonify(
+                        {
+                            "error": f"Dataset {name} missing required columns ('Day No.' and 'Number of entries')"
+                        }
+                    ),
+                    400,
+                )
 
             datasets.append(df)
             dataset_names.append(name)
@@ -143,11 +168,15 @@ def predict():
             all_results.append(results)
 
         # Calculate all XGBoost averages
-        xgb_averages = [np.mean(results["XGBoost"]["predictions"]) for results in all_results]
+        xgb_averages = [
+            np.mean(results["XGBoost"]["predictions"]) for results in all_results
+        ]
 
         # Calculate percentages
         total_sum = sum(xgb_averages)
-        percentages = [(avg / total_sum) * 100 if total_sum > 0 else 0 for avg in xgb_averages]
+        percentages = [
+            (avg / total_sum) * 100 if total_sum > 0 else 0 for avg in xgb_averages
+        ]
 
         # Run BuddyAllocation if available
         buddy_output = run_buddy_allocation(percentages)
@@ -160,11 +189,13 @@ def predict():
                     "dataset": name,
                     "results": result,
                     "xgb_average": float(xgb_avg),
-                    "percentage": float(pct)
+                    "percentage": float(pct),
                 }
-                for name, result, xgb_avg, pct in zip(dataset_names, all_results, xgb_averages, percentages)
+                for name, result, xgb_avg, pct in zip(
+                    dataset_names, all_results, xgb_averages, percentages
+                )
             ],
-            "buddy_allocation_output": buddy_output
+            "buddy_allocation_output": buddy_output,
         }
 
         return jsonify(response)
