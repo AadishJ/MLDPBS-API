@@ -137,28 +137,28 @@ int read_percentages(const char *filepath, double *percentages, int max_count)
     char line[256];
     int count = 0;
 
-    while (count < max_count && fgets(line, sizeof(line), file))
+    while (fgets(line, sizeof(line), file) && count < max_count)
     {
-        // Remove trailing newline
-        line[strcspn(line, "\n")] = 0;
-
-        // Convert string to double
-        char *endptr;
-        percentages[count] = strtod(line, &endptr);
-
-        // Check if conversion was successful
-        if (endptr == line)
+        for (int i = 0; i < 3; ++i) // Assuming "Dataset 1", "Dataset 2", "Dataset 3"
         {
-            printf("Warning: Could not parse line: %s\n", line);
-            continue;
+            char pattern[32];
+            snprintf(pattern, sizeof(pattern), "Dataset %d:", i + 1);
+            char *ptr = strstr(line, pattern);
+            if (ptr != NULL)
+            {
+                double value;
+                if (sscanf(ptr + strlen(pattern), " %lf%%", &value) == 1)
+                {
+                    percentages[count++] = value;
+                }
+            }
         }
-
-        count++;
     }
 
     fclose(file);
     return count;
 }
+
 
 int main()
 {
