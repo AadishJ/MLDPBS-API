@@ -80,8 +80,8 @@ def train_and_predict(X_train, X_test, y_train, y_test, future_days=7):
     return results
 
 
-def run_buddy_allocation(percentages):
-    """Run the BuddyAllocation program with the given percentages."""
+def run_buddy_allocation(percentages, entry_sizes):
+    """Run the BuddyAllocation program with the given percentages and entry sizes."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     buddy_executable = os.path.join(script_dir, "BuddyAllocation")
 
@@ -89,11 +89,16 @@ def run_buddy_allocation(percentages):
     predictions_dir = os.path.join(script_dir, "predictions")
     os.makedirs(predictions_dir, exist_ok=True)
 
-    # Create the percentages file
+    # Create the percentages file with both percentages and block sizes
     percentages_file = os.path.join(predictions_dir, "percentages.txt")
     with open(percentages_file, "w") as f:
+        # Write percentages first
         for percentage in percentages:
             f.write(f"{percentage:.2f}\n")
+        
+        # Write block sizes (entry sizes) second
+        for entry_size in entry_sizes:
+            f.write(f"{entry_size}\n")
 
     try:
         # Check if the executable exists
@@ -155,6 +160,7 @@ def predict():
 
         datasets = []
         dataset_names = []
+        entry_sizes = []  # Store entry sizes
 
         # Process each dataset from the request
         for dataset_obj in data:
@@ -168,6 +174,7 @@ def predict():
 
             name = dataset_obj["name"]
             dataset_data = dataset_obj["data"]
+            entry_size = dataset_obj.get("entry_size", 1)  # Default to 1 if not provided
 
             # Convert to pandas DataFrame
             df = pd.DataFrame(dataset_data)
@@ -189,6 +196,7 @@ def predict():
 
             datasets.append(df)
             dataset_names.append(name)
+            entry_sizes.append(entry_size)
 
         # Process datasets and make predictions
         all_results = []
@@ -204,14 +212,18 @@ def predict():
             np.mean(results["XGBoost"]["predictions"]) for results in all_results
         ]
 
-        # Calculate percentages
-        total_sum = sum(xgb_averages)
+        # Calculate weighted values (avg * size)
+        weighted_values = [avg * size for avg, size in zip(xgb_averages, entry_sizes)]
+        total_weighted_sum = sum(weighted_values)
+
+        # Calculate percentages using the formula: (avg * size / total_sum) * 100
         percentages = [
-            (avg / total_sum) * 100 if total_sum > 0 else 0 for avg in xgb_averages
+            (weighted_value / total_weighted_sum) * 100 if total_weighted_sum > 0 else 0 
+            for weighted_value in weighted_values
         ]
 
-        # Run BuddyAllocation if available
-        buddy_output = run_buddy_allocation(percentages)
+        # Run BuddyAllocation if available - now passing both percentages and entry sizes
+        buddy_output = run_buddy_allocation(percentages, entry_sizes)
 
         # Prepare response
         response = {
@@ -221,10 +233,12 @@ def predict():
                     "dataset": name,
                     "results": result,
                     "xgb_average": float(xgb_avg),
+                    "entry_size": size,
+                    "weighted_value": float(weighted_val),
                     "percentage": float(pct),
                 }
-                for name, result, xgb_avg, pct in zip(
-                    dataset_names, all_results, xgb_averages, percentages
+                for name, result, xgb_avg, size, weighted_val, pct in zip(
+                    dataset_names, all_results, xgb_averages, entry_sizes, weighted_values, percentages
                 )
             ],
             "buddy_allocation_output": buddy_output,

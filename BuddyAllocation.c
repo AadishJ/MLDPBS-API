@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <time.h>
 #include <pthread.h>
-#include <bits/pthreadtypes.h>
 #include <string.h>
 
 #define TOTAL_RAM_SIZE (512 * 1024 * 1024) // 512 MB
@@ -41,12 +40,12 @@ void *allocateBlock(Partition *partition, int size);
 void deallocate(BuddyAllocator *allocator, void *ptr);
 void cleanup(BuddyAllocator *allocator);
 void *thread_worker(void *args);
-int read_percentages(const char *filepath, double *percentages, int max_count);
+int read_data_from_file(const char *filepath, double *percentages, int *block_sizes, int max_count);
 
 void init(BuddyAllocator *allocator, int default_block_size)
 {
     allocator->partition.pool_size = TOTAL_RAM_SIZE;
-    allocator->partition.block_size = default_block_size; // Default block size
+    allocator->partition.block_size = default_block_size; // Use provided block size
     allocator->partition.pool = (uint8_t *)malloc(TOTAL_RAM_SIZE);
     allocator->partition.free_blocks = (bool *)malloc(TOTAL_RAM_SIZE / default_block_size * sizeof(bool));
     pthread_spin_init(&allocator->partition.lock, 0);
@@ -124,8 +123,8 @@ void *thread_worker(void *args)
     return NULL;
 }
 
-// Read percentages from file and return the number of percentages read
-int read_percentages(const char *filepath, double *percentages, int max_count)
+// Read percentages and block sizes from file
+int read_data_from_file(const char *filepath, double *percentages, int *block_sizes, int max_count)
 {
     FILE *file = fopen(filepath, "r");
     if (file == NULL)
@@ -135,29 +134,69 @@ int read_percentages(const char *filepath, double *percentages, int max_count)
     }
 
     char line[256];
-    int count = 0;
+    int percentage_count = 0;
+    int block_size_count = 0;
+    int reading_percentages = 1; // Flag to track what we're reading
 
-    while (count < max_count && fgets(line, sizeof(line), file))
+    // First pass: count how many lines we have
+    int total_lines = 0;
+    while (fgets(line, sizeof(line), file))
+    {
+        line[strcspn(line, "\n")] = 0; // Remove newline
+        if (strlen(line) > 0)          // Skip empty lines
+        {
+            total_lines++;
+        }
+    }
+
+    // Reset file pointer
+    rewind(file);
+
+    // Assume first half are percentages, second half are block sizes
+    int expected_count = total_lines / 2;
+    int current_line = 0;
+
+    while (fgets(line, sizeof(line), file))
     {
         // Remove trailing newline
         line[strcspn(line, "\n")] = 0;
 
-        // Convert string to double
-        char *endptr;
-        percentages[count] = strtod(line, &endptr);
-
-        // Check if conversion was successful
-        if (endptr == line)
+        // Skip empty lines
+        if (strlen(line) == 0)
         {
-            printf("Warning: Could not parse line: %s\n", line);
             continue;
         }
 
-        count++;
+        if (current_line < expected_count)
+        {
+            // Reading percentages
+            char *endptr;
+            double percentage = strtod(line, &endptr);
+            if (endptr != line && percentage_count < max_count)
+            {
+                percentages[percentage_count] = percentage;
+                percentage_count++;
+            }
+        }
+        else
+        {
+            // Reading block sizes
+            char *endptr;
+            int block_size = (int)strtol(line, &endptr, 10);
+            if (endptr != line && block_size_count < max_count)
+            {
+                block_sizes[block_size_count] = block_size;
+                block_size_count++;
+            }
+        }
+        current_line++;
     }
 
     fclose(file);
-    return count;
+
+    // Return the minimum count to ensure we have matching pairs
+    int min_count = (percentage_count < block_size_count) ? percentage_count : block_size_count;
+    return min_count;
 }
 
 int main()
@@ -186,9 +225,10 @@ int main()
     if (!path_found)
     {
         printf("Error: percentages.txt not found in any expected location\n");
-        printf("Using default block sizes\n");
+        printf("Using default values\n");
 
-        // Use default block sizes
+        // Use default values
+        double default_percentages[] = {40.0, 35.0, 25.0};
         int default_block_sizes[] = {482, 360, 6};
         int block_size_count = 3;
 
@@ -215,6 +255,7 @@ int main()
             pthread_join(threads[i], NULL);
         }
 
+        printf("Results:\n");
         printf("Block Size\tAvg Time Taken (ms)\n");
         for (int b = 0; b < block_size_count; ++b)
         {
@@ -226,27 +267,21 @@ int main()
         return 0;
     }
 
-    // Read percentages from file
+    // Read data from file
     double percentages[MAX_BLOCK_TYPES];
-    int count = read_percentages(file_path, percentages, MAX_BLOCK_TYPES);
+    int block_sizes[MAX_BLOCK_TYPES];
+    int count = read_data_from_file(file_path, percentages, block_sizes, MAX_BLOCK_TYPES);
 
     if (count == 0)
     {
-        printf("No valid percentages found in file. Exiting.\n");
+        printf("No valid data found in file. Exiting.\n");
         return 1;
     }
 
-    printf("Found %d percentages in file\n", count);
-
-    // Calculate block sizes based on percentages
-    int block_sizes[MAX_BLOCK_TYPES];
+    printf("Found %d entries in file\n", count);
     for (int i = 0; i < count; i++)
     {
-        // Calculate block size as percentage of total RAM
-        block_sizes[i] = (int)((percentages[i] / 100.0) * TOTAL_RAM_SIZE);
-        if (block_sizes[i] < 1)
-            block_sizes[i] = 1; // Ensure minimum block size
-        printf("Block %d: %.2f%% of RAM = %d bytes\n", i + 1, percentages[i], block_sizes[i]);
+        printf("Entry %d: %.2f%% - Block size: %d bytes\n", i + 1, percentages[i], block_sizes[i]);
     }
 
     // Initialize the allocator with the largest block size for simplicity
